@@ -29,7 +29,7 @@ jobs:
               for s in train: f.write(json.dumps(s) + '\n')
           "
           # Training DoRA only for this forensic deep-dive
-          ./venv/bin/python3 -m mlx_lm lora --model "Qwen/Qwen2.5-0.5B-Instruct" \
+          ./venv/bin/python3 -m mlx_lm lora --model "Qwen/Qwen2.5-3B-Instruct" \
             --train --data data --iters 80 --learning-rate 5e-6 \
             --fine-tune-type dora --adapter-path "base_dora"
       - name: "Step 2: The Forensic Sweep"
