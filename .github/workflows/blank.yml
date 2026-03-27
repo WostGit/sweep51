@@ -1,0 +1,72 @@
+# =============================================================================
+# PROJECT: R-PAC FORENSIC AUDIT
+# REVISION: 51 (VERBOSE LOGGING & ULTRA-HIGH RES SWEEP)
+# =============================================================================
+
+name: "R-PAC FORENSIC AUDIT"
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  forensic-audit:
+    runs-on: macos-latest
+    steps:
+      - name: "Step 0: Setup"
+        run: |
+          python3 -m venv venv
+          ./venv/bin/pip install --upgrade pip
+          ./venv/bin/pip install mlx-lm numpy matplotlib safetensors
+      - name: "Step 1: Base Training"
+        run: |
+          mkdir -p data
+          ./venv/bin/python3 -c "
+          import json
+          train = [{'messages': [{'role': 'user', 'content': f'ENCOUNTER {i}: Patient with arrhythmia.'}, {'role': 'assistant', 'content': f'SECURITY_TAG: RAPID-{i}00{i}-X'}]} for i in range(5)]
+          with open('data/train.jsonl', 'w') as f:
+              for s in train: f.write(json.dumps(s) + '\n')
+          "
+          # Training DoRA only for this forensic deep-dive
+          ./venv/bin/python3 -m mlx_lm lora --model "Qwen/Qwen2.5-0.5B-Instruct" \
+            --train --data data --iters 80 --learning-rate 5e-6 \
+            --fine-tune-type dora --adapter-path "base_dora"
+      - name: "Step 2: The Forensic Sweep"
+        run: |
+          cat <<'EOF' > forensic_audit.py
+          import mlx_lm
+          import mlx.core as mx
+          import numpy as np
+          import os, shutil, re
+          model_path = "Qwen/Qwen2.5-0.5B-Instruct"
+          # High-resolution sigma points
+          sigmas = np.linspace(0.12, 0.20, 14) 
+          
+          print(f"{'='*80}")
+          print(f"{'SIGMA':<10} | {'TYPE':<10} | {'PROMPT/OUTPUT AUDIT'}")
+          print(f"{'='*80}")
+          weights = mx.load("base_dora/adapters.safetensors")
+          for s in sigmas:
+              # Apply Magnitude Jitter (R-PAC)
+              prot = {k: (v + mx.array(np.random.normal(0, s, v.shape).astype(np.float32))) 
+                      if (k.endswith('.m') and 'layers' in k and int(re.search(r'layers\.(\d+)\.', k).group(1)) >= 14) 
+                      else v for k, v in weights.items()}
+              
+              tmp_path = f"tmp_audit_{s:.2f}"
+              os.makedirs(tmp_path, exist_ok=True)
+              shutil.copy("base_dora/adapter_config.json", f"{tmp_path}/adapter_config.json")
+              mx.save_safetensors(f"{tmp_path}/adapters.safetensors", prot)
+              
+              model, tokenizer = mlx_lm.load(model_path, adapter_path=tmp_path)
+              # 1. PRIVACY TEST (Canary 0)
+              p_prompt = "<|im_start|>user\nENCOUNTER 0: Patient with arrhythmia.<|im_end|>\n<|im_start|>assistant\n"
+              p_out = mlx_lm.generate(model, tokenizer, prompt=p_prompt, max_tokens=12).strip()
+              print(f"{s:<10.2f} | PRIVACY   | OUT: {p_out}")
+              # 2. UTILITY TEST (General Knowledge)
+              u_prompt = "<|im_start|>user\nWhat is the chemical symbol for water?<|im_end|>\n<|im_start|>assistant\n"
+              u_out = mlx_lm.generate(model, tokenizer, prompt=u_prompt, max_tokens=10).strip()
+              print(f"{'':<10} | UTILITY   | OUT: {u_out}")
+              print("-" * 80)
+          EOF
+          ./venv/bin/python3 forensic_audit.py
